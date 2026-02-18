@@ -1,4 +1,6 @@
 <?php
+// functions.php v=2 updated 2026-02-18 11:00
+
 /**
  * توابع و تعاریف قالب سیر و سلوک
  */
@@ -138,7 +140,7 @@ function seirosolok_register_post_types() {
 }
 add_action('init', 'seirosolok_register_post_types');
 
-// --- 4. منطق فیلتر و جستجو (بدون تغییر) ---
+// --- 4. منطق فیلتر و جستجو ---
 function seirosolok_get_tour_filter_args($params) {
     $args = array(
         'post_type'      => 'tour',
@@ -168,7 +170,7 @@ function seirosolok_get_tour_filter_args($params) {
 
 function seirosolok_modify_archive_query($query) {
     if (!is_admin() && $query->is_main_query() && is_post_type_archive('tour')) {
-        $params = $_GET; // ساده‌سازی برای خلاصه
+        $params = $_GET; 
         $args = seirosolok_get_tour_filter_args($params);
         foreach ($args as $key => $value) $query->set($key, $value);
     }
@@ -244,10 +246,10 @@ add_action('wp_ajax_nopriv_submit_reservation', 'seirosolok_submit_reservation_a
 
 
 // ---------------------------------------------------------
-// بخش جدید: احراز هویت پیامکی (OTP) - نسخه نهایی
+// بخش جدید: احراز هویت پیامکی (OTP) - نسخه نهایی اصلاح شده
 // ---------------------------------------------------------
 
-// الف) ارسال کد OTP
+// الف) ارسال کد OTP (اصلاح شده برای دیباگ و خطایابی)
 function seirosolok_send_otp_ajax() {
     $mobile = isset($_POST['mobile']) ? sanitize_text_field($_POST['mobile']) : '';
 
@@ -256,62 +258,53 @@ function seirosolok_send_otp_ajax() {
         wp_send_json_error(array('message' => 'شماره موبایل معتبر نیست.'));
     }
 
-    // اصلاح فرمت شماره (تبدیل 09 به 989 برای پنل IPPanel)
-    $api_mobile = '98' . substr($mobile, 1);
-
     // تولید کد ۴ رقمی
     $otp = rand(1000, 9999);
     
-    // ذخیره در دیتابیس (Transient) برای ۲ دقیقه
-    set_transient('otp_' . $mobile, $otp, 120);
+    // ذخیره در دیتابیس (Transient) برای ۳ دقیقه
+    set_transient('otp_' . $mobile, $otp, 180);
 
     // تنظیمات پنل پیامک
     $url = 'https://api.sms-webservice.com/api/V3/SendTokenSingle';
     $api_key = '247031-1cd694282b64474691f34d19af15ef00';
     $template = 'seirosolokOTP';
+    
+    // تبدیل شماره (فرمت 98)
+    $api_mobile = '98' . substr($mobile, 1);
 
+    // بدنه درخواست (ارسال هر دو پارامتر Token و code برای اطمینان)
     $body = array(
         'ApiKey' => $api_key,
         'TemplateKey' => $template,
         'Mobile' => $api_mobile,
-        'Token' => (string)$otp 
+        'Token' => (string)$otp,
+        'code' => (string)$otp // اضافه شده برای سازگاری با برخی الگوها
     );
 
     $response = wp_remote_post($url, array(
         'headers' => array('Content-Type' => 'application/json'),
         'body'    => json_encode($body),
-        'sslverify' => false, // برای جلوگیری از خطای SSL در برخی سرورها
-        'timeout'   => 20
+        'sslverify' => false, // جلوگیری از خطای SSL
+        'timeout'   => 15
     ));
 
-    $is_success = false;
-    $api_error_message = 'خطای نامشخص';
-
-    if ( !is_wp_error($response) ) {
+    if ( is_wp_error($response) ) {
+        error_log('SMS Error (WP): ' . $response->get_error_message());
+        wp_send_json_error(array('message' => 'خطای ارتباط با سرور پیامک.'));
+    } else {
         $response_body = wp_remote_retrieve_body($response);
         $result = json_decode($response_body, true);
 
-        // بررسی انواع پاسخ‌های موفقیت پنل
-        if ( isset($result['IsSuccess']) && $result['IsSuccess'] ) {
-            $is_success = true;
-        } elseif ( isset($result['success']) && $result['success'] ) {
-            $is_success = true;
-        } else {
-             // استخراج پیام خطا
-             $api_error_message = isset($result['Message']) ? $result['Message'] : (isset($result['message']) ? $result['message'] : 'خطای نامشخص از پنل پیامک');
-             if (isset($result['ResultCode'])) {
-                 $api_error_message .= ' (کد: ' . $result['ResultCode'] . ')';
-             }
-        }
-    } else {
-        $api_error_message = $response->get_error_message();
-    }
+        // لاگ کردن پاسخ برای بررسی دقیق‌تر در فایل debug.log
+        error_log('SMS Response: ' . $response_body);
 
-    if ( $is_success ) {
-        wp_send_json_success(array('message' => 'کد تایید به شماره شما پیامک شد.'));
-    } else {
-        // در نسخه نهایی، خطای دقیق را نمایش می‌دهیم تا ادمین بتواند پیگیری کند
-        wp_send_json_error(array('message' => 'خطا در ارسال پیامک: ' . $api_error_message));
+        // بررسی موفقیت (سازگار با خروجی‌های مختلف IPPanel)
+        if ( (isset($result['IsSuccess']) && $result['IsSuccess']) || (isset($result['result']['code']) && $result['result']['code'] == 200) ) {
+            wp_send_json_success(array('message' => 'کد تایید ارسال شد.'));
+        } else {
+            $msg = isset($result['Message']) ? $result['Message'] : 'خطای پنل پیامک';
+            wp_send_json_error(array('message' => 'خطا در ارسال: ' . $msg));
+        }
     }
 }
 add_action('wp_ajax_nopriv_send_otp', 'seirosolok_send_otp_ajax');
