@@ -7,7 +7,7 @@
         <div class="absolute inset-0 hero-pattern opacity-20"></div>
         <div class="absolute inset-0 bg-gradient-to-b from-primary-900/90 via-primary-900/80 to-primary-900"></div>
     </div>
-
+ss
     <div class="relative z-10 max-w-2xl mx-auto">
         
         <div class="mb-8 relative inline-block">
